@@ -87,5 +87,37 @@ class HelpersEmbedTests(unittest.TestCase):
         self.assertEqual(embedded[0].rstrip(), helpers_src)
 
 
+class DatasetCellTests(unittest.TestCase):
+    def test_dataset_fetch_and_extract_cells_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("snapshot_download", joined)
+        self.assertIn('repo_id="WatermelonAnh/FoodClassifierL2"', joined)
+        self.assertIn('allow_patterns=[f"l2_{TARGET}/*"]', joined)
+        self.assertIn("extract_target_zip", joined)
+
+    def test_preflight_validation_cell_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("validate_imagefolder", joined)
+
+    def test_tf_data_cells_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("image_dataset_from_directory", joined)
+        self.assertIn('class_names=cfg["classes"]', joined)
+        self.assertIn('label_mode="int"', joined)
+
+
+class ModelCellTests(unittest.TestCase):
+    def test_model_build_cell_uses_tfhub_layer_and_softmax(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("hub.KerasLayer", joined)
+        self.assertIn('tfhub_url', joined)
+        self.assertIn("trainable=False", joined)  # stage 1 frozen
+        self.assertIn("layers.Rescaling", joined)
+        self.assertIn("RandomFlip", joined)
+        self.assertIn("RandomRotation", joined)
+        self.assertIn('activation="softmax"', joined)
+        self.assertIn("Dense(", joined)
+
+
 if __name__ == "__main__":
     unittest.main()

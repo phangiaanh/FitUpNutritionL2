@@ -198,6 +198,101 @@ print(f"Config OK. TARGET={TARGET}  variant={cfg['variant']}  "
     ))
     cells.append(code(helpers_source.rstrip()))
 
+    # Cell 7: Markdown + dataset download/extract
+    cells.append(markdown(
+        "### Dataset: download from HF, extract zip, validate, build tf.data"
+    ))
+    cells.append(code(
+        r"""if FORCE_REDOWNLOAD or not (Path(HF_CACHE) / f"l2_{TARGET}" / "data.zip").is_file():
+    snapshot_download(
+        repo_id="WatermelonAnh/FoodClassifierL2",
+        repo_type="dataset",
+        local_dir=HF_CACHE,
+        allow_patterns=[f"l2_{TARGET}/*"],
+    )
+else:
+    print(f"[download] HF cache for l2_{TARGET} already populated, skipping.")
+
+extract_target_zip(HF_CACHE, DATA_ROOT, target=TARGET, force=FORCE_REDOWNLOAD)
+print("data dir:", DATA_DIR)"""
+    ))
+
+    # Cell 8: Pre-flight validation
+    cells.append(markdown(
+        "### Label validation\n\n"
+        "Fails loudly if any class folder is missing, empty, or contains "
+        "non-image files. Run this **before** training."
+    ))
+    cells.append(code(
+        'validate_imagefolder(DATA_DIR, cfg["classes"])'
+    ))
+
+    # Cell 9: tf.data datasets
+    cells.append(markdown("### tf.data pipelines (train / val / test)"))
+    cells.append(code(
+        r"""def _make_ds(split: str, *, shuffle: bool, cache: bool):
+    ds = tf.keras.utils.image_dataset_from_directory(
+        f"{DATA_DIR}/{split}",
+        labels="inferred",
+        label_mode="int",
+        class_names=cfg["classes"],          # locks label order to TARGETS
+        image_size=(cfg["imgsz"], cfg["imgsz"]),
+        batch_size=BATCH_SIZE,
+        shuffle=shuffle,
+        seed=42,
+    )
+    if cache:
+        ds = ds.cache()
+    return ds.prefetch(tf.data.AUTOTUNE)
+
+train_ds = _make_ds("train", shuffle=True,  cache=True)
+val_ds   = _make_ds("val",   shuffle=False, cache=True)
+test_ds  = _make_ds("test",  shuffle=False, cache=False)
+
+# image_dataset_from_directory yields float32 in [0,255]; cast to uint8 for the
+# model's uint8 Input contract.
+def _to_uint8(x, y):
+    return tf.cast(x, tf.uint8), y
+
+train_ds = train_ds.map(_to_uint8, num_parallel_calls=tf.data.AUTOTUNE)
+val_ds   = val_ds.map(_to_uint8,   num_parallel_calls=tf.data.AUTOTUNE)
+test_ds  = test_ds.map(_to_uint8,  num_parallel_calls=tf.data.AUTOTUNE)
+print("Datasets ready.")"""
+    ))
+
+    # Cell 10: Build model
+    cells.append(markdown(
+        "### Build model\n\n"
+        "EfficientNet Lite backbone from TF Hub (frozen for stage 1), with the "
+        "augmentation block baked in as the first sub-block (train-time only, "
+        "stripped on TFLite export). Input dtype is `uint8`; normalization to "
+        "`[-1, 1]` happens inside the model."
+    ))
+    cells.append(code(
+        r"""augmentation_block = tf.keras.Sequential([
+    tf.keras.layers.RandomFlip("horizontal"),
+    tf.keras.layers.RandomRotation(0.1),
+    tf.keras.layers.RandomZoom(0.1),
+    tf.keras.layers.RandomContrast(0.1),
+    tf.keras.layers.RandomBrightness(0.1),
+], name="augmentation")
+
+tfhub_url = cfg["tfhub_url"]
+imgsz     = cfg["imgsz"]
+nc        = cfg["num_classes"]
+
+inputs = tf.keras.Input(shape=(imgsz, imgsz, 3), dtype=tf.uint8)
+x = tf.cast(inputs, tf.float32)
+x = tf.keras.layers.Rescaling(1.0 / 127.5, offset=-1.0)(x)
+x = augmentation_block(x)
+hub_layer = hub.KerasLayer(tfhub_url, trainable=False, name="efficientnet_lite_backbone")
+features = hub_layer(x)
+x = tf.keras.layers.Dropout(DROPOUT)(features)
+outputs = tf.keras.layers.Dense(nc, activation="softmax", name="classifier_head")(x)
+model = tf.keras.Model(inputs, outputs, name=f"l2_{TARGET}_efficientnet_{cfg['variant']}")
+model.summary()"""
+    ))
+
     return cells
 
 
