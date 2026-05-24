@@ -293,6 +293,104 @@ model = tf.keras.Model(inputs, outputs, name=f"l2_{TARGET}_efficientnet_{cfg['va
 model.summary()"""
     ))
 
+    # Cell 11: Class weights
+    cells.append(markdown(
+        "### Class weights\n\n"
+        "Inverse-frequency weights computed from the **train** split, passed to "
+        "both `fit` calls."
+    ))
+    cells.append(code(
+        r"""class_weight = compute_class_weights(DATA_DIR, cfg["classes"])
+print("class_weight:")
+for i, cls in enumerate(cfg["classes"]):
+    print(f"  {i:2d} {cls:20s}  {class_weight[i]:.3f}")"""
+    ))
+
+    # Cell 12: Stage 1 - head only
+    cells.append(markdown(
+        "### Stage 1 - train head only (backbone frozen)\n\n"
+        "Lets the random head settle without disturbing the pretrained backbone "
+        "features. Resume via `BackupAndRestore` if a previous Colab session "
+        "died mid-training."
+    ))
+    cells.append(code(
+        r"""def _common_callbacks(patience: int):
+    return [
+        tf.keras.callbacks.ModelCheckpoint(
+            BEST_KERAS,
+            monitor="val_sparse_categorical_accuracy",
+            mode="max",
+            save_best_only=True,
+        ),
+        tf.keras.callbacks.BackupAndRestore(backup_dir=BACKUP_DIR),
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_sparse_categorical_accuracy",
+            mode="max",
+            patience=patience,
+            restore_best_weights=True,
+        ),
+        tf.keras.callbacks.CSVLogger(TRAINING_LOG, append=True),
+    ]
+
+
+# Stage 1: head-only
+hub_layer.trainable = False
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=STAGE1_LR),
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+    metrics=[
+        tf.keras.metrics.SparseCategoricalAccuracy(name="sparse_categorical_accuracy"),
+        tf.keras.metrics.SparseTopKCategoricalAccuracy(k=3, name="top3_accuracy"),
+    ],
+)
+
+history_s1 = model.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=STAGE1_EPOCHS,
+    class_weight=class_weight,
+    callbacks=_common_callbacks(STAGE1_PATIENCE),
+)"""
+    ))
+
+    # Cell 13: Stage 2 - full fine-tune with cosine LR
+    cells.append(markdown(
+        "### Stage 2 - full fine-tune (backbone unfrozen, cosine LR)\n\n"
+        "**Re-compiling the model is mandatory** - flipping "
+        "`trainable` is only picked up at compile time."
+    ))
+    cells.append(code(
+        r"""# Stage 2: full fine-tune
+hub_layer.trainable = True
+
+# Compute steps_per_epoch for the cosine schedule
+steps_per_epoch = int(np.ceil(sum(1 for _ in train_ds.unbatch())  # cached, cheap
+                              / BATCH_SIZE))
+cosine_schedule = tf.keras.optimizers.schedules.CosineDecay(
+    initial_learning_rate=STAGE2_LR,
+    decay_steps=steps_per_epoch * STAGE2_EPOCHS,
+    alpha=STAGE2_LR_FLOOR / STAGE2_LR,
+)
+
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=cosine_schedule),
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+    metrics=[
+        tf.keras.metrics.SparseCategoricalAccuracy(name="sparse_categorical_accuracy"),
+        tf.keras.metrics.SparseTopKCategoricalAccuracy(k=3, name="top3_accuracy"),
+    ],
+)
+
+history_s2 = model.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=STAGE1_EPOCHS + STAGE2_EPOCHS,
+    initial_epoch=STAGE1_EPOCHS,
+    class_weight=class_weight,
+    callbacks=_common_callbacks(STAGE2_PATIENCE),
+)"""
+    ))
+
     return cells
 
 

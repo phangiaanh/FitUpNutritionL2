@@ -119,5 +119,34 @@ class ModelCellTests(unittest.TestCase):
         self.assertIn("Dense(", joined)
 
 
+class TrainingCellTests(unittest.TestCase):
+    def test_class_weights_cell_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("compute_class_weights", joined)
+        self.assertIn("class_weight=", joined)
+
+    def test_two_stage_training_cells_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        # Stage 1 markers
+        self.assertIn("Stage 1", joined)
+        self.assertIn("STAGE1_EPOCHS", joined)
+        self.assertIn("STAGE1_LR", joined)
+        # Stage 2 markers
+        self.assertIn("Stage 2", joined)
+        self.assertIn("STAGE2_EPOCHS", joined)
+        self.assertIn("hub_layer.trainable = True", joined)
+        # Re-compile between stages (the easy-to-forget detail)
+        self.assertEqual(joined.count("model.compile("), 2)
+
+    def test_callbacks_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("ModelCheckpoint", joined)
+        self.assertIn("BackupAndRestore", joined)
+        self.assertIn("EarlyStopping", joined)
+        self.assertIn("CSVLogger", joined)
+        self.assertIn("BACKUP_DIR", joined)
+        self.assertIn("BEST_KERAS", joined)
+
+
 if __name__ == "__main__":
     unittest.main()
