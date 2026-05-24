@@ -63,3 +63,61 @@ def extract_target_zip(
     print(f"[extract] {zip_path} -> {target_dir}")
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(target_dir)
+
+
+def validate_imagefolder(
+    data_dir,
+    class_names: list[str],
+    splits: Iterable[str] = ("train", "val", "test"),
+) -> None:
+    """Walk data_dir/<split>/<class>/ for every split and assert well-formedness.
+
+    Raises ValueError on the first violation.
+
+    Per split, asserts:
+      - The split dir exists.
+      - The set of class subdirs exactly matches class_names.
+      - Each class subdir is non-empty.
+      - Every file under each class subdir has an allowed image extension.
+
+    On success, prints a per-split, per-class count table and the imbalance
+    ratio max(count) / min(count).
+    """
+    data_dir = Path(data_dir)
+    expected = set(class_names)
+
+    for split in splits:
+        split_dir = data_dir / split
+        if not split_dir.is_dir():
+            raise ValueError(f"[{split}] missing split dir: {split_dir}")
+
+        present = {p.name for p in split_dir.iterdir() if p.is_dir()}
+        missing = expected - present
+        if missing:
+            raise ValueError(
+                f"[{split}] missing class folder(s): {sorted(missing)}"
+            )
+        extra = present - expected
+        if extra:
+            raise ValueError(
+                f"[{split}] unexpected class folder(s): {sorted(extra)}"
+            )
+
+        counts: dict[str, int] = {}
+        for cls in class_names:
+            cls_dir = split_dir / cls
+            files = [p for p in cls_dir.iterdir() if p.is_file()]
+            if not files:
+                raise ValueError(f"[{split}] class folder empty: {cls_dir}")
+            for f in files:
+                if f.suffix.lower() not in IMAGE_EXTS:
+                    raise ValueError(
+                        f"[{split}] non-image file: {f}  "
+                        f"(allowed: {sorted(IMAGE_EXTS)})"
+                    )
+            counts[cls] = len(files)
+
+        ratio = max(counts.values()) / min(counts.values())
+        print(f"[{split}] total={sum(counts.values())}  imbalance(max/min)={ratio:.2f}")
+        for cls in class_names:
+            print(f"  {cls}: {counts[cls]}")

@@ -7,11 +7,13 @@ numpy + pillow installed (TF is required only by the notebook itself).
 from __future__ import annotations
 
 import io
+import shutil
 import sys
 import unittest
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -80,6 +82,77 @@ class ExtractTargetZipTests(unittest.TestCase):
             hf_cache.mkdir()
             with self.assertRaisesRegex(FileNotFoundError, "data.zip"):
                 extract_target_zip(hf_cache, data_root, target="rice")
+
+
+from scripts.notebook_helpers import validate_imagefolder  # noqa: E402
+
+
+def _make_imagefolder(
+    root: Path,
+    classes: list[str],
+    splits: Iterable[str] = ("train", "val", "test"),
+    n_per_class: int = 2,
+) -> None:
+    """Create a minimal well-formed ImageFolder tree under root/<split>/<class>/."""
+    for split in splits:
+        for cls in classes:
+            d = root / split / cls
+            d.mkdir(parents=True, exist_ok=True)
+            for i in range(n_per_class):
+                (d / f"{cls}_{i}.jpg").write_bytes(b"")
+
+
+RICE_CLASSES = ["chao", "com_chien", "com_chien_ga", "com_tam", "com_trang", "xoi"]
+
+
+class ValidateImagefolderTests(unittest.TestCase):
+    def test_accepts_well_formed_tree(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES)
+            validate_imagefolder(root, RICE_CLASSES)  # should not raise
+
+    def test_rejects_missing_class_folder(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES)
+            # remove one class from train
+            shutil.rmtree(root / "train" / "xoi")
+            with self.assertRaisesRegex(ValueError, "missing class"):
+                validate_imagefolder(root, RICE_CLASSES)
+
+    def test_rejects_unexpected_class_folder(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES)
+            (root / "train" / "WHO_PUT_THIS_HERE").mkdir()
+            (root / "train" / "WHO_PUT_THIS_HERE" / "x.jpg").write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "unexpected class"):
+                validate_imagefolder(root, RICE_CLASSES)
+
+    def test_rejects_empty_class_folder(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES)
+            for p in (root / "train" / "xoi").iterdir():
+                p.unlink()
+            with self.assertRaisesRegex(ValueError, "empty"):
+                validate_imagefolder(root, RICE_CLASSES)
+
+    def test_rejects_non_image_file(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES)
+            (root / "train" / "xoi" / "notes.txt").write_text("garbage")
+            with self.assertRaisesRegex(ValueError, "non-image"):
+                validate_imagefolder(root, RICE_CLASSES)
+
+    def test_raises_on_missing_split_dir(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES, splits=("train", "val"))
+            with self.assertRaisesRegex(ValueError, "missing split"):
+                validate_imagefolder(root, RICE_CLASSES)
 
 
 if __name__ == "__main__":
