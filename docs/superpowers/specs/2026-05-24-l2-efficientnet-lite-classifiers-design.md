@@ -267,7 +267,7 @@ writer = image_classifier.MetadataWriter.create_for_inference(
 Path(f"{EXPORTS_DIR}/l2_{TARGET}_int8.tflite").write_bytes(writer.populate())
 ```
 
-The mobile app can read class names and preprocessing directly from the `.tflite` (via TFLite Task Library or `tflite_support.metadata`) instead of shipping a separate `labels.txt`. `tflite-support` is added to `requirements.txt`; Colab ships it pre-installed.
+The mobile app can read class names and preprocessing directly from the `.tflite` (via TFLite Task Library or `tflite_support.metadata`) instead of shipping a separate `labels.txt`. `tflite-support` is installed explicitly in the notebook's `pip install` cell (Colab does not ship it by default) and pinned in `requirements.txt` for local dev.
 
 ### Fallback: FP16
 
