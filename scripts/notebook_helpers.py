@@ -188,3 +188,12 @@ def representative_dataset_gen(
             yield [arr]
 
     return _gen
+
+
+def write_labels_txt(out_path, class_names: list[str]) -> Path:
+    """Write one class name per line, in the given order. Overwrites any
+    existing file at out_path. Returns the path written."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(class_names) + "\n")
+    return out_path

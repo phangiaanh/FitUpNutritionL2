@@ -252,5 +252,26 @@ class RepresentativeDatasetGenTests(unittest.TestCase):
             self.assertEqual(len(batches), 12)
 
 
+from scripts.notebook_helpers import write_labels_txt  # noqa: E402
+
+
+class WriteLabelsTxtTests(unittest.TestCase):
+    def test_writes_one_class_per_line_in_order(self) -> None:
+        with TemporaryDirectory() as td:
+            out = Path(td) / "labels.txt"
+            write_labels_txt(out, RICE_CLASSES)
+            self.assertEqual(
+                out.read_text().splitlines(),
+                ["chao", "com_chien", "com_chien_ga", "com_tam", "com_trang", "xoi"],
+            )
+
+    def test_overwrites_existing_file(self) -> None:
+        with TemporaryDirectory() as td:
+            out = Path(td) / "labels.txt"
+            out.write_text("garbage\n")
+            write_labels_txt(out, ["a", "b"])
+            self.assertEqual(out.read_text().splitlines(), ["a", "b"])
+
+
 if __name__ == "__main__":
     unittest.main()
