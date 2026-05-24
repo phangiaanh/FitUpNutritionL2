@@ -148,5 +148,44 @@ class TrainingCellTests(unittest.TestCase):
         self.assertIn("BEST_KERAS", joined)
 
 
+class EvalAndExportCellTests(unittest.TestCase):
+    def test_eval_cell_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("load_model(BEST_KERAS)", joined)
+        self.assertIn("classification_report", joined)
+        self.assertIn("confusion_matrix", joined)
+        self.assertIn("top3", joined)
+
+    def test_int8_export_cell_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("TFLiteConverter.from_keras_model", joined)
+        self.assertIn("TFLITE_BUILTINS_INT8", joined)
+        self.assertIn("inference_input_type", joined)
+        self.assertIn("inference_output_type", joined)
+        self.assertIn("tf.uint8", joined)
+        self.assertIn("representative_dataset_gen", joined)
+
+    def test_int8_metadata_embedding_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("tflite_support", joined)
+        self.assertIn("ImageClassifierWriter", joined)
+        self.assertIn("input_norm_mean=[127.5]", joined)
+        self.assertIn("input_norm_std=[127.5]", joined)
+        self.assertIn("write_labels_txt", joined)
+
+    def test_fp16_fallback_export_cell_present(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("supported_types = [tf.float16]", joined)
+        self.assertIn("_fp16.tflite", joined)
+
+    def test_smoke_test_cell_validates_uint8_contract(self) -> None:
+        joined = "\n".join(_sources(_generate()))
+        self.assertIn("tf.lite.Interpreter", joined)
+        self.assertIn('inp["dtype"] == np.uint8', joined)
+        self.assertIn('out["dtype"] == np.uint8', joined)
+        self.assertIn("_smoke_test.png", joined)
+        self.assertIn("_int8.tflite", joined)
+
+
 if __name__ == "__main__":
     unittest.main()

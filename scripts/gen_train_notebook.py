@@ -391,6 +391,195 @@ history_s2 = model.fit(
 )"""
     ))
 
+    # Cell 14: Evaluate on test split
+    cells.append(markdown(
+        "### Evaluate on test split\n\n"
+        "Reports overall top-1 / top-3 accuracy, per-class precision/recall/F1, "
+        "and a confusion matrix (raw counts + row-normalized)."
+    ))
+    cells.append(code(
+        r"""import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix
+
+best_model = tf.keras.models.load_model(BEST_KERAS)
+test_loss, test_top1, test_top3 = best_model.evaluate(test_ds, verbose=1)
+print(f"\n[{TARGET}] test top-1={test_top1:.4f}  top-3={test_top3:.4f}")
+
+y_true, y_pred = [], []
+for x, y in test_ds:
+    probs = best_model.predict(x, verbose=0)
+    y_true.append(y.numpy())
+    y_pred.append(np.argmax(probs, axis=1))
+y_true = np.concatenate(y_true)
+y_pred = np.concatenate(y_pred)
+
+# Per-class report
+report_txt = classification_report(
+    y_true, y_pred,
+    labels=list(range(cfg["num_classes"])),
+    target_names=cfg["classes"],
+    digits=4,
+    zero_division=0,
+)
+print("\n" + report_txt)
+Path(f"{RUN_DIR}/per_class_report.txt").write_text(report_txt)
+
+# Confusion matrix: raw counts + row-normalized
+cm = confusion_matrix(y_true, y_pred, labels=list(range(cfg["num_classes"])))
+cm_norm = cm.astype(np.float32) / np.maximum(cm.sum(axis=1, keepdims=True), 1)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+for ax, mat, title, fmt in [
+    (axes[0], cm,      "raw counts",   "d"),
+    (axes[1], cm_norm, "row-normalized", ".2f"),
+]:
+    im = ax.imshow(mat, cmap="Blues")
+    ax.set_title(f"{TARGET}: confusion matrix - {title}")
+    ax.set_xticks(range(cfg["num_classes"]))
+    ax.set_yticks(range(cfg["num_classes"]))
+    ax.set_xticklabels(cfg["classes"], rotation=45, ha="right")
+    ax.set_yticklabels(cfg["classes"])
+    ax.set_xlabel("predicted")
+    ax.set_ylabel("true")
+    for i in range(cfg["num_classes"]):
+        for j in range(cfg["num_classes"]):
+            ax.text(j, i, format(mat[i, j], fmt),
+                    ha="center", va="center",
+                    color="white" if mat[i, j] > mat.max() * 0.5 else "black",
+                    fontsize=8)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+plt.tight_layout()
+plt.savefig(f"{RUN_DIR}/confusion_matrix.png", dpi=120)
+plt.show()
+
+# Training curves
+if Path(TRAINING_LOG).is_file():
+    import csv
+    epochs, loss, val_loss, acc, val_acc = [], [], [], [], []
+    with open(TRAINING_LOG) as f:
+        for row in csv.DictReader(f):
+            epochs.append(int(row["epoch"]))
+            loss.append(float(row["loss"]))
+            val_loss.append(float(row["val_loss"]))
+            acc.append(float(row["sparse_categorical_accuracy"]))
+            val_acc.append(float(row["val_sparse_categorical_accuracy"]))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    axes[0].plot(epochs, loss, label="train"); axes[0].plot(epochs, val_loss, label="val")
+    axes[0].set_title("loss");     axes[0].set_xlabel("epoch"); axes[0].legend()
+    axes[1].plot(epochs, acc,  label="train"); axes[1].plot(epochs, val_acc,  label="val")
+    axes[1].set_title("accuracy"); axes[1].set_xlabel("epoch"); axes[1].legend()
+    plt.tight_layout()
+    plt.savefig(f"{RUN_DIR}/training_curves.png", dpi=120)
+    plt.show()
+
+if test_top1 < 0.70:
+    print(f"\nWARNING: test top-1={test_top1:.4f} < 0.70 - this run is weak; "
+          f"export still proceeds but the artifact may not be ship-quality.")"""
+    ))
+
+    # Cell 15: INT8 TFLite export + metadata
+    cells.append(markdown(
+        "### TFLite export - INT8 with uint8 I/O (primary)\n\n"
+        "Full integer quantization. Mobile app passes raw uint8 pixels and "
+        "reads quantized output via the metadata embedded into the .tflite."
+    ))
+    cells.append(code(
+        r"""from tflite_support.metadata_writers import image_classifier, writer_utils
+from tflite_support.metadata_writers.image_classifier import MetadataWriter as ImageClassifierWriter
+
+# Write labels.txt (consumed by the metadata writer)
+labels_path = write_labels_txt(LABELS_TXT, cfg["classes"])
+
+# Convert with INT8 PTQ + uint8 I/O
+converter = tf.lite.TFLiteConverter.from_keras_model(best_model)
+converter.optimizations          = [tf.lite.Optimize.DEFAULT]
+converter.representative_dataset = representative_dataset_gen(
+    DATA_DIR, imgsz=cfg["imgsz"], n=CALIB_SAMPLES, seed=0,
+)
+converter.target_spec.supported_ops  = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+converter.inference_input_type   = tf.uint8
+converter.inference_output_type  = tf.uint8
+tflite_int8 = converter.convert()
+int8_path = f"{EXPORTS_DIR}/l2_{TARGET}_int8.tflite"
+Path(int8_path).write_bytes(tflite_int8)
+print(f"INT8 TFLite -> {int8_path}  ({len(tflite_int8) / 1024:.1f} KB)")
+
+# Embed labels + preprocessing metadata
+writer = image_classifier.MetadataWriter.create_for_inference(
+    writer_utils.load_file(int8_path),
+    input_norm_mean=[127.5],
+    input_norm_std=[127.5],
+    label_file_paths=[str(labels_path)],
+)
+writer_utils.save_file(writer.populate(), int8_path)
+print(f"Embedded labels + preprocessing metadata into {int8_path}")"""
+    ))
+
+    # Cell 16: FP16 fallback export
+    cells.append(markdown(
+        "### TFLite export - FP16 (fallback)\n\n"
+        "Half-precision fallback for accuracy debugging if INT8 ever shows "
+        "per-class regressions on-device. No embedded metadata - this is not "
+        "the deploy artifact."
+    ))
+    cells.append(code(
+        r"""converter = tf.lite.TFLiteConverter.from_keras_model(best_model)
+converter.optimizations               = [tf.lite.Optimize.DEFAULT]
+converter.target_spec.supported_types = [tf.float16]
+tflite_fp16 = converter.convert()
+fp16_path = f"{EXPORTS_DIR}/l2_{TARGET}_fp16.tflite"
+Path(fp16_path).write_bytes(tflite_fp16)
+print(f"FP16 TFLite -> {fp16_path}  ({len(tflite_fp16) / 1024:.1f} KB)")"""
+    ))
+
+    # Cell 17: Smoke test on INT8 TFLite
+    cells.append(markdown(
+        "### Inference smoke test (INT8 TFLite)\n\n"
+        "Validates the deployed artifact end-to-end: dtype contract, "
+        "dequantization, top-3 prediction on a random test image."
+    ))
+    cells.append(code(
+        r"""interp = tf.lite.Interpreter(model_path=int8_path)
+interp.allocate_tensors()
+inp = interp.get_input_details()[0]
+out = interp.get_output_details()[0]
+assert inp["dtype"] == np.uint8, f"expected uint8 input, got {inp['dtype']}"
+assert out["dtype"] == np.uint8, f"expected uint8 output, got {out['dtype']}"
+
+# Pick one random test image (recursively, so any class is fair game)
+test_files = sorted(Path(f"{DATA_DIR}/test").rglob("*"))
+test_files = [p for p in test_files if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}]
+sample = random.choice(test_files)
+true_class = sample.parent.name
+
+img = np.array(Image.open(sample).convert("RGB").resize(
+    (cfg["imgsz"], cfg["imgsz"]), Image.LANCZOS), dtype=np.uint8)[None, ...]
+interp.set_tensor(inp["index"], img)
+interp.invoke()
+probs_q = interp.get_tensor(out["index"])[0]
+scale, zp = out["quantization"]
+probs = (probs_q.astype(np.float32) - zp) * scale
+
+top3 = probs.argsort()[-3:][::-1]
+print(f"Sample : {sample}")
+print(f"True   : {true_class}")
+print("Top-3  :", [(cfg["classes"][i], float(probs[i])) for i in top3])
+
+# Save annotated preview
+fig, ax = plt.subplots(figsize=(6, 6))
+ax.imshow(Image.open(sample).convert("RGB"))
+ax.set_title(
+    f"true={true_class}\n"
+    + " | ".join(f"{cfg['classes'][i]}:{probs[i]:.2f}" for i in top3),
+    fontsize=10,
+)
+ax.axis("off")
+smoke_png = f"{EXPORTS_DIR}/l2_{TARGET}_smoke_test.png"
+fig.savefig(smoke_png, dpi=120, bbox_inches="tight")
+plt.show()
+print(f"Saved annotated preview to {smoke_png}")"""
+    ))
+
     return cells
 
 
