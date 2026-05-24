@@ -121,3 +121,26 @@ def validate_imagefolder(
         print(f"[{split}] total={sum(counts.values())}  imbalance(max/min)={ratio:.2f}")
         for cls in class_names:
             print(f"  {cls}: {counts[cls]}")
+
+
+def compute_class_weights(data_dir, class_names: list[str]) -> dict[int, float]:
+    """Return {class_index: weight} computed from the TRAIN split counts.
+
+    weight_i = total / (num_classes * count_i)
+
+    Balanced input yields weight ≈ 1.0 for every class. Under-represented
+    classes get weight > 1; over-represented classes get weight < 1.
+    Suitable for tf.keras.Model.fit(class_weight=...).
+    """
+    data_dir = Path(data_dir)
+    train_dir = data_dir / "train"
+    counts = []
+    for cls in class_names:
+        cls_dir = train_dir / cls
+        n = sum(1 for p in cls_dir.iterdir() if p.is_file())
+        if n == 0:
+            raise ValueError(f"class {cls!r} has zero training samples")
+        counts.append(n)
+    total = sum(counts)
+    nc = len(class_names)
+    return {i: total / (nc * c) for i, c in enumerate(counts)}

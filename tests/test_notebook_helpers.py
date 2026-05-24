@@ -155,5 +155,47 @@ class ValidateImagefolderTests(unittest.TestCase):
                 validate_imagefolder(root, RICE_CLASSES)
 
 
+from scripts.notebook_helpers import compute_class_weights  # noqa: E402
+
+
+class ComputeClassWeightsTests(unittest.TestCase):
+    def test_balanced_input_yields_unit_weights(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES, n_per_class=10)
+            weights = compute_class_weights(root, RICE_CLASSES)
+            self.assertEqual(set(weights.keys()), set(range(len(RICE_CLASSES))))
+            for i in range(len(RICE_CLASSES)):
+                self.assertAlmostEqual(weights[i], 1.0, places=6)
+
+    def test_underrepresented_class_gets_higher_weight(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES, n_per_class=10)
+            # Strip xoi (last class) down to 1 sample in train
+            xoi_train = root / "train" / "xoi"
+            files = sorted(xoi_train.iterdir())
+            for f in files[1:]:
+                f.unlink()
+            weights = compute_class_weights(root, RICE_CLASSES)
+            xoi_idx = RICE_CLASSES.index("xoi")
+            other_idx = RICE_CLASSES.index("com_tam")
+            self.assertGreater(weights[xoi_idx], weights[other_idx])
+            self.assertGreater(weights[xoi_idx], 1.0)
+            self.assertLess(weights[other_idx], 1.0)
+
+    def test_only_train_split_is_used(self) -> None:
+        # val/test imbalance should not affect weights
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _make_imagefolder(root, RICE_CLASSES, n_per_class=10)
+            # Make val wildly imbalanced; train stays balanced
+            for f in sorted((root / "val" / "xoi").iterdir())[1:]:
+                f.unlink()
+            weights = compute_class_weights(root, RICE_CLASSES)
+            for i in range(len(RICE_CLASSES)):
+                self.assertAlmostEqual(weights[i], 1.0, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()
