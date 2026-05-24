@@ -197,5 +197,60 @@ class ComputeClassWeightsTests(unittest.TestCase):
                 self.assertAlmostEqual(weights[i], 1.0, places=6)
 
 
+import numpy as np  # noqa: E402
+from PIL import Image  # noqa: E402
+
+from scripts.notebook_helpers import representative_dataset_gen  # noqa: E402
+
+
+def _write_real_jpegs(root: Path, classes: list[str], n_per_class: int = 3) -> None:
+    """Overwrite the empty .jpg files with real 32x32 random images.
+
+    representative_dataset_gen actually opens images, so they must be valid.
+    """
+    rng = np.random.default_rng(0)
+    for split in ("train", "val", "test"):
+        for cls in classes:
+            cls_dir = root / split / cls
+            cls_dir.mkdir(parents=True, exist_ok=True)
+            for i in range(n_per_class):
+                arr = rng.integers(0, 256, size=(32, 32, 3), dtype=np.uint8)
+                Image.fromarray(arr).save(cls_dir / f"{cls}_{i}.jpg", "JPEG")
+
+
+class RepresentativeDatasetGenTests(unittest.TestCase):
+    def test_yields_n_uint8_batches_of_correct_shape(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _write_real_jpegs(root, RICE_CLASSES, n_per_class=5)
+            gen_fn = representative_dataset_gen(root, imgsz=224, n=7, seed=0)
+            batches = list(gen_fn())
+            self.assertEqual(len(batches), 7)
+            for b in batches:
+                self.assertIsInstance(b, list)
+                self.assertEqual(len(b), 1)
+                arr = b[0]
+                self.assertEqual(arr.shape, (1, 224, 224, 3))
+                self.assertEqual(arr.dtype, np.uint8)
+
+    def test_deterministic_with_seed(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _write_real_jpegs(root, RICE_CLASSES, n_per_class=5)
+            gen1 = list(representative_dataset_gen(root, imgsz=64, n=4, seed=42)())
+            gen2 = list(representative_dataset_gen(root, imgsz=64, n=4, seed=42)())
+            for a, b in zip(gen1, gen2):
+                np.testing.assert_array_equal(a[0], b[0])
+
+    def test_caps_at_available_train_images(self) -> None:
+        # Only 6 classes * 2 train images = 12 total available
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _write_real_jpegs(root, RICE_CLASSES, n_per_class=2)
+            gen_fn = representative_dataset_gen(root, imgsz=64, n=200, seed=0)
+            batches = list(gen_fn())
+            self.assertEqual(len(batches), 12)
+
+
 if __name__ == "__main__":
     unittest.main()

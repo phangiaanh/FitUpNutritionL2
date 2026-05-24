@@ -12,7 +12,10 @@ import random
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
+
+import numpy as np
+from PIL import Image
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -144,3 +147,44 @@ def compute_class_weights(data_dir, class_names: list[str]) -> dict[int, float]:
     total = sum(counts)
     nc = len(class_names)
     return {i: total / (nc * c) for i, c in enumerate(counts)}
+
+
+def representative_dataset_gen(
+    data_dir,
+    imgsz: int,
+    n: int = 200,
+    seed: int = 0,
+) -> Callable[[], Iterator[list[np.ndarray]]]:
+    """Build a callable that yields up to `n` calibration batches.
+
+    Each yielded item is `[ndarray of shape (1, imgsz, imgsz, 3), dtype=uint8]`
+    drawn from random train images, resized via PIL.Image.LANCZOS.
+
+    This shape matches the contract of tf.lite.TFLiteConverter.representative_dataset:
+    a no-arg callable returning an iterable of input-list batches.
+
+    If fewer than `n` train images exist, yields what's available (deterministic
+    under the given seed).
+    """
+    data_dir = Path(data_dir)
+    train_dir = data_dir / "train"
+    all_images: list[Path] = []
+    for cls_dir in sorted(train_dir.iterdir()):
+        if not cls_dir.is_dir():
+            continue
+        for p in sorted(cls_dir.iterdir()):
+            if p.suffix.lower() in IMAGE_EXTS:
+                all_images.append(p)
+
+    rng = random.Random(seed)
+    rng.shuffle(all_images)
+    selected = all_images[:n]
+
+    def _gen() -> Iterator[list[np.ndarray]]:
+        for p in selected:
+            with Image.open(p) as im:
+                im = im.convert("RGB").resize((imgsz, imgsz), Image.LANCZOS)
+            arr = np.asarray(im, dtype=np.uint8)[None, ...]
+            yield [arr]
+
+    return _gen
