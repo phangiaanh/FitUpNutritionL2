@@ -484,7 +484,7 @@ if test_top1 < 0.70:
         "reads quantized output via the metadata embedded into the .tflite."
     ))
     cells.append(code(
-        r"""from tflite_support.metadata_writers import image_classifier, writer_utils
+        r"""from tflite_support.metadata_writers import writer_utils
 from tflite_support.metadata_writers.image_classifier import MetadataWriter as ImageClassifierWriter
 
 # Write labels.txt (consumed by the metadata writer)
@@ -505,7 +505,7 @@ Path(int8_path).write_bytes(tflite_int8)
 print(f"INT8 TFLite -> {int8_path}  ({len(tflite_int8) / 1024:.1f} KB)")
 
 # Embed labels + preprocessing metadata
-writer = image_classifier.MetadataWriter.create_for_inference(
+writer = ImageClassifierWriter.create_for_inference(
     writer_utils.load_file(int8_path),
     input_norm_mean=[127.5],
     input_norm_std=[127.5],
