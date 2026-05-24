@@ -10,28 +10,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 
 import numpy as np
 import tensorflow as tf
 from PIL import Image
 
 
-def _read_metadata(tflite_path: str) -> tuple[list[str], list[float], list[float]]:
-    """Pull class labels + (mean, std) from the .tflite's embedded metadata."""
+def _read_metadata(tflite_path: str) -> list[str]:
+    """Pull class labels from the .tflite's embedded metadata."""
     from tflite_support import metadata as _md
 
     displayer = _md.MetadataDisplayer.with_model_file(tflite_path)
     label_file = displayer.get_packed_associated_file_list()[0]
     labels = displayer.get_associated_file_buffer(label_file).decode("utf-8").splitlines()
-
-    md_json = json.loads(displayer.get_metadata_json())
-    input_md = md_json["subgraph_metadata"][0]["input_tensor_metadata"][0]
-    norm = next(
-        p["options"] for p in input_md["process_units"]
-        if p["options_type"] == "NormalizationOptions"
-    )
-    return labels, norm["mean"], norm["std"]
+    return labels
 
 
 def main() -> None:
@@ -41,7 +33,7 @@ def main() -> None:
     ap.add_argument("--topk",   type=int, default=3)
     args = ap.parse_args()
 
-    labels, _mean, _std = _read_metadata(args.tflite)
+    labels = _read_metadata(args.tflite)
     print(f"Embedded labels ({len(labels)}): {labels}")
 
     interp = tf.lite.Interpreter(model_path=args.tflite)

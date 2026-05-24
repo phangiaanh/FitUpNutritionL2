@@ -40,6 +40,10 @@ class GenerationSmokeTests(unittest.TestCase):
         self.assertIn("cells", doc)
         self.assertGreater(len(doc["cells"]), 0)
 
+    def test_notebook_has_expected_cell_count(self) -> None:
+        doc = _generate()
+        self.assertEqual(len(doc["cells"]), 29)
+
     def test_every_code_cell_parses_as_python(self) -> None:
         doc = _generate()
         for i, cell in enumerate(doc["cells"]):

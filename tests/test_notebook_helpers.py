@@ -6,7 +6,6 @@ numpy + pillow installed (TF is required only by the notebook itself).
 
 from __future__ import annotations
 
-import io
 import shutil
 import sys
 import unittest

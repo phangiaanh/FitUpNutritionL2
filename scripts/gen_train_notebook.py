@@ -24,7 +24,11 @@ HELPERS_PATH = REPO_ROOT / "scripts" / "notebook_helpers.py"
 
 def jl(text: str) -> list[str]:
     lines = text.split("\n")
-    return [ln + "\n" for ln in lines]
+    if not lines:
+        return []
+    result = [ln + "\n" for ln in lines[:-1]]
+    result.append(lines[-1])
+    return result
 
 
 def markdown(text: str) -> dict:

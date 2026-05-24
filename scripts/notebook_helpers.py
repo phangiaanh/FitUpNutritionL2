@@ -183,8 +183,8 @@ def representative_dataset_gen(
     def _gen() -> Iterator[list[np.ndarray]]:
         for p in selected:
             with Image.open(p) as im:
-                im = im.convert("RGB").resize((imgsz, imgsz), Image.LANCZOS)
-            arr = np.asarray(im, dtype=np.uint8)[None, ...]
+                resized = im.convert("RGB").resize((imgsz, imgsz), Image.LANCZOS)
+                arr = np.asarray(resized, dtype=np.uint8)[None, ...]
             yield [arr]
 
     return _gen
