@@ -18,6 +18,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 
+def _load_model_compat(path: str):
+    # The model config contains 'optional' in InputLayer, added in a newer TF
+    # save but not accepted by tf_keras's from_config. Strip it on the way in.
+    _orig = tf_keras.layers.InputLayer.from_config.__func__
+
+    @classmethod  # type: ignore[misc]
+    def _patched(cls, config):
+        config.pop("optional", None)
+        return _orig(cls, config)
+
+    tf_keras.layers.InputLayer.from_config = _patched
+    try:
+        return tf_keras.models.load_model(path)
+    finally:
+        tf_keras.layers.InputLayer.from_config = classmethod(_orig)
+
+
 TARGETS = {
     "noodle": dict(imgsz=260, classes=[
         "banh_canh", "bun_bo_hue", "bun_cha", "bun_cha_ca", "bun_mam", "bun_rieu",
@@ -41,7 +58,7 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg   = TARGETS[args.target]
-    model = tf_keras.models.load_model(args.model)
+    model = _load_model_compat(args.model)
 
     img = Image.open(args.image).convert("RGB").resize(
         (cfg["imgsz"], cfg["imgsz"]), Image.LANCZOS)

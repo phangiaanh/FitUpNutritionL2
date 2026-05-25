@@ -39,6 +39,23 @@ import tensorflow as tf
 import tf_keras
 from PIL import Image
 
+
+def _load_model_compat(path: str):
+    # The model config contains 'optional' in InputLayer, added in a newer TF
+    # save but not accepted by tf_keras's from_config. Strip it on the way in.
+    _orig = tf_keras.layers.InputLayer.from_config.__func__
+
+    @classmethod  # type: ignore[misc]
+    def _patched(cls, config):
+        config.pop("optional", None)
+        return _orig(cls, config)
+
+    tf_keras.layers.InputLayer.from_config = _patched
+    try:
+        return tf_keras.models.load_model(path)
+    finally:
+        tf_keras.layers.InputLayer.from_config = classmethod(_orig)
+
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 TARGETS = {
@@ -119,7 +136,7 @@ def main() -> None:
 
     # --- load ----------------------------------------------------------------
     print(f"[load]    {args.model}")
-    model = tf_keras.models.load_model(args.model)
+    model = _load_model_compat(args.model)
     print(f"[load]    OK — {model.name}  "
           f"input={model.input_shape}  output={model.output_shape}")
 
