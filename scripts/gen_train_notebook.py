@@ -82,7 +82,9 @@ disconnect never destroys progress."""
     # Cell 2: pip install
     cells.append(code(
         "%%capture\n"
-        "%pip install -q --upgrade tensorflow-hub tflite-support huggingface_hub pillow"
+        "%pip install -q --upgrade "
+        "git+https://github.com/sebastian-sz/efficientnet-lite-keras@main "
+        "tflite-support huggingface_hub pillow"
     ))
 
     # Cell 3: Imports + GPU check
@@ -97,15 +99,27 @@ from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
-import tensorflow_hub as hub
+from efficientnet_lite import (
+    EfficientNetLiteB0,
+    EfficientNetLiteB1,
+    EfficientNetLiteB2,
+)
 from PIL import Image
 from huggingface_hub import login, snapshot_download
+
+BACKBONE_CLS = {
+    "EfficientNetLiteB0": EfficientNetLiteB0,
+    "EfficientNetLiteB1": EfficientNetLiteB1,
+    "EfficientNetLiteB2": EfficientNetLiteB2,
+}
 
 gpus = tf.config.list_physical_devices("GPU")
 if not gpus:
     raise SystemExit(
         "GPU required - Runtime -> Change runtime type -> GPU (A100 recommended)."
     )
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
 
 print("TF:", tf.__version__)
 print("GPU:", gpus[0].name)"""
@@ -137,6 +151,7 @@ EXPORTS_DIR = os.path.join(DRIVE_ROOT, "exports")
 HF_DATASET_REPO = "WatermelonAnh/FoodClassifierL2"
 HF_CACHE        = "/content/hf_cache"
 DATA_ROOT       = "/content/l2_data"
+CACHE_DIR       = "/content/l2_cache"   # on-disk tf.data cache (avoids RAM blow-up)
 
 # === The one knob to change between runs ===========================
 TARGET = "noodle"           # "noodle" | "rice" | "soup"
@@ -145,7 +160,7 @@ TARGET = "noodle"           # "noodle" | "rice" | "soup"
 TARGETS = {
     "noodle": dict(
         variant="lite2", imgsz=260, num_classes=12,
-        tfhub_url="https://tfhub.dev/tensorflow/efficientnet/lite2/feature-vector/2",
+        backbone="EfficientNetLiteB2",
         classes=[
             "banh_canh", "bun_bo_hue", "bun_cha", "bun_cha_ca", "bun_mam", "bun_rieu",
             "cao_lau", "hu_tieu", "mi", "mi_quang", "nui_xao_bo", "pho",
@@ -153,14 +168,14 @@ TARGETS = {
     ),
     "rice": dict(
         variant="lite1", imgsz=240, num_classes=6,
-        tfhub_url="https://tfhub.dev/tensorflow/efficientnet/lite1/feature-vector/2",
+        backbone="EfficientNetLiteB1",
         classes=[
             "chao", "com_chien", "com_chien_ga", "com_tam", "com_trang", "xoi",
         ],
     ),
     "soup": dict(
         variant="lite0", imgsz=224, num_classes=4,
-        tfhub_url="https://tfhub.dev/tensorflow/efficientnet/lite0/feature-vector/2",
+        backbone="EfficientNetLiteB0",
         classes=[
             "bo_kho", "canh", "lau", "sup_cua",
         ],
@@ -177,7 +192,7 @@ TRAINING_LOG = f"{RUN_DIR}/training_log.csv"
 FORCE_REDOWNLOAD = False
 
 # Training hyperparameters
-BATCH_SIZE       = 64
+BATCH_SIZE       = 32   # 32 fits T4 Colab RAM; raise to 64 on A100
 STAGE1_EPOCHS    = 8
 STAGE1_LR        = 1e-3
 STAGE1_PATIENCE  = 4
@@ -234,7 +249,12 @@ print("data dir:", DATA_DIR)"""
     # Cell 9: tf.data datasets
     cells.append(markdown("### tf.data pipelines (train / val / test)"))
     cells.append(code(
-        r"""def _make_ds(split: str, *, shuffle: bool, cache: bool):
+        r"""def _to_uint8(x, y):
+    # image_dataset_from_directory yields float32 [0,255]; uint8 is 4x smaller to cache.
+    return tf.cast(x, tf.uint8), y
+
+
+def _make_ds(split: str, *, shuffle: bool, cache_to_disk: bool):
     ds = tf.keras.utils.image_dataset_from_directory(
         f"{DATA_DIR}/{split}",
         labels="inferred",
@@ -245,32 +265,26 @@ print("data dir:", DATA_DIR)"""
         shuffle=shuffle,
         seed=42,
     )
-    if cache:
-        ds = ds.cache()
-    return ds.prefetch(tf.data.AUTOTUNE)
+    ds = ds.map(_to_uint8, num_parallel_calls=tf.data.AUTOTUNE)
+    if cache_to_disk:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        ds = ds.cache(f"{CACHE_DIR}/l2_{TARGET}_{split}.tfdata")
+    return ds.prefetch(2)
 
-train_ds = _make_ds("train", shuffle=True,  cache=True)
-val_ds   = _make_ds("val",   shuffle=False, cache=True)
-test_ds  = _make_ds("test",  shuffle=False, cache=False)
-
-# image_dataset_from_directory yields float32 in [0,255]; cast to uint8 for the
-# model's uint8 Input contract.
-def _to_uint8(x, y):
-    return tf.cast(x, tf.uint8), y
-
-train_ds = train_ds.map(_to_uint8, num_parallel_calls=tf.data.AUTOTUNE)
-val_ds   = val_ds.map(_to_uint8,   num_parallel_calls=tf.data.AUTOTUNE)
-test_ds  = test_ds.map(_to_uint8,  num_parallel_calls=tf.data.AUTOTUNE)
+train_ds = _make_ds("train", shuffle=True,  cache_to_disk=True)
+val_ds   = _make_ds("val",   shuffle=False, cache_to_disk=True)
+test_ds  = _make_ds("test",  shuffle=False, cache_to_disk=False)
 print("Datasets ready.")"""
     ))
 
     # Cell 10: Build model
     cells.append(markdown(
         "### Build model\n\n"
-        "EfficientNet Lite backbone from TF Hub (frozen for stage 1), with the "
-        "augmentation block baked in as the first sub-block (train-time only, "
-        "stripped on TFLite export). Input dtype is `uint8`; normalization to "
-        "`[-1, 1]` happens inside the model."
+        "EfficientNet Lite backbone from `efficientnet-lite-keras` (frozen for "
+        "stage 1, fine-tunable in stage 2), with the augmentation block baked in "
+        "as the first sub-block (train-time only, stripped on TFLite export). "
+        "Input dtype is `uint8`; normalization to `[-1, 1]` happens inside the "
+        "model."
     ))
     cells.append(code(
         r"""augmentation_block = tf.keras.Sequential([
@@ -281,16 +295,22 @@ print("Datasets ready.")"""
     tf.keras.layers.RandomBrightness(0.1),
 ], name="augmentation")
 
-tfhub_url = cfg["tfhub_url"]
-imgsz     = cfg["imgsz"]
-nc        = cfg["num_classes"]
+imgsz = cfg["imgsz"]
+nc    = cfg["num_classes"]
 
 inputs = tf.keras.Input(shape=(imgsz, imgsz, 3), dtype=tf.uint8)
 x = tf.cast(inputs, tf.float32)
 x = tf.keras.layers.Rescaling(1.0 / 127.5, offset=-1.0)(x)
 x = augmentation_block(x)
-hub_layer = hub.KerasLayer(tfhub_url, trainable=False, name="efficientnet_lite_backbone")
-features = hub_layer(x)
+backbone = BACKBONE_CLS[cfg["backbone"]](
+    weights="imagenet",
+    input_shape=(imgsz, imgsz, 3),
+    include_top=False,
+    pooling="avg",
+)
+backbone.trainable = False
+backbone._name = "efficientnet_lite_backbone"
+features = backbone(x)
 x = tf.keras.layers.Dropout(DROPOUT)(features)
 outputs = tf.keras.layers.Dense(nc, activation="softmax", name="classifier_head")(x)
 model = tf.keras.Model(inputs, outputs, name=f"l2_{TARGET}_efficientnet_{cfg['variant']}")
@@ -338,7 +358,7 @@ for i, cls in enumerate(cfg["classes"]):
 
 
 # Stage 1: head-only
-hub_layer.trainable = False
+backbone.trainable = False
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=STAGE1_LR),
     loss=tf.keras.losses.SparseCategoricalCrossentropy(),
@@ -365,7 +385,7 @@ history_s1 = model.fit(
     ))
     cells.append(code(
         r"""# Stage 2: full fine-tune
-hub_layer.trainable = True
+backbone.trainable = True
 
 # Compute steps_per_epoch for the cosine schedule
 steps_per_epoch = int(np.ceil(sum(1 for _ in train_ds.unbatch())  # cached, cheap

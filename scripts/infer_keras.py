@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
+import tf_keras
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +41,7 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg   = TARGETS[args.target]
-    model = tf.keras.models.load_model(args.model)
+    model = tf_keras.models.load_model(args.model)
 
     img = Image.open(args.image).convert("RGB").resize(
         (cfg["imgsz"], cfg["imgsz"]), Image.LANCZOS)

@@ -1,5 +1,5 @@
 tensorflow>=2.15.0
-tensorflow-hub>=0.16.0
+efficientnet-lite-keras @ git+https://github.com/sebastian-sz/efficientnet-lite-keras@main
 tflite-support>=0.4.4
 huggingface_hub>=0.21.0
 pillow>=10.0.0

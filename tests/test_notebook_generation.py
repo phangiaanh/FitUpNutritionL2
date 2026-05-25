@@ -111,11 +111,16 @@ class DatasetCellTests(unittest.TestCase):
 
 
 class ModelCellTests(unittest.TestCase):
-    def test_model_build_cell_uses_tfhub_layer_and_softmax(self) -> None:
+    def test_model_build_cell_uses_efficientnet_lite_backbone_and_softmax(self) -> None:
         joined = "\n".join(_sources(_generate()))
-        self.assertIn("hub.KerasLayer", joined)
-        self.assertIn('tfhub_url', joined)
-        self.assertIn("trainable=False", joined)  # stage 1 frozen
+        self.assertIn("efficientnet_lite", joined)
+        self.assertIn("EfficientNetLiteB0", joined)
+        self.assertIn("EfficientNetLiteB1", joined)
+        self.assertIn("EfficientNetLiteB2", joined)
+        self.assertIn('cfg["backbone"]', joined)
+        self.assertIn("backbone.trainable = False", joined)  # stage 1 frozen
+        self.assertIn("include_top=False", joined)
+        self.assertIn('pooling="avg"', joined)
         self.assertIn("layers.Rescaling", joined)
         self.assertIn("RandomFlip", joined)
         self.assertIn("RandomRotation", joined)
@@ -138,7 +143,7 @@ class TrainingCellTests(unittest.TestCase):
         # Stage 2 markers
         self.assertIn("Stage 2", joined)
         self.assertIn("STAGE2_EPOCHS", joined)
-        self.assertIn("hub_layer.trainable = True", joined)
+        self.assertIn("backbone.trainable = True", joined)
         # Re-compile between stages (the easy-to-forget detail)
         self.assertEqual(joined.count("model.compile("), 2)
 
