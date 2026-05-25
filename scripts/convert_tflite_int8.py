@@ -94,11 +94,22 @@ def build_representative_dataset(calib_dir: Path, imgsz: int):
     return _gen
 
 
-def embed_metadata(tflite_path: str, classes: list[str]) -> None:
-    from tflite_support.metadata_writers import writer_utils
-    from tflite_support.metadata_writers.image_classifier import (
-        MetadataWriter as ImageClassifierWriter,
-    )
+def write_labels_sidecar(tflite_path: str, classes: list[str]) -> str:
+    """Always write a <stem>_labels.txt next to the .tflite as a fallback."""
+    sidecar = str(Path(tflite_path).with_suffix("")) + "_labels.txt"
+    Path(sidecar).write_text("\n".join(classes) + "\n", encoding="utf-8")
+    return sidecar
+
+
+def embed_metadata(tflite_path: str, classes: list[str]) -> bool:
+    """Embed labels into the .tflite via tflite-support. Returns True on success."""
+    try:
+        from tflite_support.metadata_writers import writer_utils
+        from tflite_support.metadata_writers.image_classifier import (
+            MetadataWriter as ImageClassifierWriter,
+        )
+    except ModuleNotFoundError:
+        return False
 
     with tempfile.NamedTemporaryFile(
         suffix=".txt", delete=False, mode="w", encoding="utf-8"
@@ -116,6 +127,8 @@ def embed_metadata(tflite_path: str, classes: list[str]) -> None:
         writer_utils.save_file(writer.populate(), tflite_path)
     finally:
         Path(labels_tmp).unlink(missing_ok=True)
+
+    return True
 
 
 def main() -> None:
@@ -155,9 +168,14 @@ def main() -> None:
     print(f"[convert] {out_path}  ({len(tflite_bytes) / 1024:.1f} KB)")
 
     # --- metadata ------------------------------------------------------------
-    print("[meta]    embedding labels + preprocessing …")
-    embed_metadata(out_path, cfg["classes"])
-    print(f"[meta]    done")
+    sidecar = write_labels_sidecar(out_path, cfg["classes"])
+    print(f"[meta]    labels sidecar → {sidecar}")
+    print("[meta]    embedding labels into .tflite …")
+    if embed_metadata(out_path, cfg["classes"]):
+        print("[meta]    embedded OK (tflite-support)")
+    else:
+        print("[meta]    tflite-support not available — skipped embedded metadata")
+        print(f"[meta]    use sidecar {sidecar} for class labels")
 
     # --- smoke test ----------------------------------------------------------
     interp = tf.lite.Interpreter(model_path=out_path)

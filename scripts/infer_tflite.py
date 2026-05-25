@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
@@ -17,13 +18,25 @@ from PIL import Image
 
 
 def _read_metadata(tflite_path: str) -> list[str]:
-    """Pull class labels from the .tflite's embedded metadata."""
-    from tflite_support import metadata as _md
+    """Pull class labels from the .tflite's embedded metadata, or a sidecar file."""
+    try:
+        from tflite_support import metadata as _md
+        displayer = _md.MetadataDisplayer.with_model_file(tflite_path)
+        label_file = displayer.get_packed_associated_file_list()[0]
+        return displayer.get_associated_file_buffer(label_file).decode("utf-8").splitlines()
+    except Exception:
+        pass
 
-    displayer = _md.MetadataDisplayer.with_model_file(tflite_path)
-    label_file = displayer.get_packed_associated_file_list()[0]
-    labels = displayer.get_associated_file_buffer(label_file).decode("utf-8").splitlines()
-    return labels
+    # Fall back to <stem>_labels.txt sidecar written by convert_tflite_int8.py
+    sidecar = str(Path(tflite_path).with_suffix("")) + "_labels.txt"
+    if Path(sidecar).is_file():
+        print(f"[labels]  reading from sidecar: {sidecar}")
+        return Path(sidecar).read_text(encoding="utf-8").splitlines()
+
+    raise FileNotFoundError(
+        f"No embedded metadata and no sidecar found at {sidecar}. "
+        "Re-run convert_tflite_int8.py to regenerate."
+    )
 
 
 def main() -> None:
